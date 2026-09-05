@@ -410,6 +410,27 @@ function upPhoto(e) {
     r.readAsDataURL(f);
 }
 
+// Clicking directly on the profile avatar calls this — replaces the MAIN
+// photo (gallery slot 0) in place, instead of requiring delete-then-re-add.
+function changeMainPhoto(e) {
+    const f = e.target.files[0]; if (!f) return;
+    if (f.size > 4 * 1024 * 1024) { showToast("⚠️ Image must be under 4MB"); return; }
+    if (!f.type.startsWith('image/')) { showToast("⚠️ Please choose an image file"); return; }
+
+    const r = new FileReader();
+    r.onload = (evt) => {
+        if (!currentUser.gallery) currentUser.gallery = [];
+        currentUser.gallery[0] = evt.target.result; // always replaces the main slot
+        currentUser.avatar = evt.target.result;
+        renderProf();
+        document.getElementById('navAv').src = currentUser.avatar;
+        syncWithFirebase();
+        showToast("📸 Profile photo updated!");
+        e.target.value = ''; // reset so choosing the same file again still fires onchange
+    };
+    r.readAsDataURL(f);
+}
+
 function delP(idx) {
     currentUser.gallery.splice(idx, 1);
     currentUser.avatar = currentUser.gallery[0] || '';
