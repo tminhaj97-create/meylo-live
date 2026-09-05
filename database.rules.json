@@ -1,0 +1,32 @@
+{
+  "rules": {
+    "users": {
+      "$uid": {
+        ".read": "auth != null",
+        ".write": "auth != null && auth.uid === $uid",
+        ".validate": "newData.hasChildren(['id','name','age'])",
+        "age": {
+          ".validate": "newData.isNumber() && newData.val() >= 18 && newData.val() <= 100"
+        },
+        "coins": {
+          ".validate": false
+        },
+        "vip": {
+          ".validate": false
+        }
+      }
+    },
+    "messages": {
+      "$room": {
+        ".read": "auth != null && $room.contains(auth.uid)",
+        ".write": "auth != null && $room.contains(auth.uid)"
+      }
+    },
+    "wallets": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": false
+      }
+    }
+  }
+}
