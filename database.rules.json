@@ -27,6 +27,29 @@
         ".read": "auth != null && auth.uid === $uid",
         ".write": false
       }
+    },
+    "likesLog": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        "$day": {
+          "$targetId": {
+            ".write": "auth != null && auth.uid === $uid && !data.exists()",
+            ".validate": "newData.val() === true"
+          }
+        }
+      }
+    },
+    "taskClaims": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": false
+      }
+    },
+    "adWatchLog": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": false
+      }
     }
   }
 }
