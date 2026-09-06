@@ -705,14 +705,40 @@ function closeAd() {
     if (window._adCb) { window._adCb(); window._adCb = null; }
 }
 
-function watchAd() {
-    showAd(() => {
-        adD.c++;
-        localStorage.setItem('meylo_ad_watch', JSON.stringify(adD));
-        document.getElementById('adsW').innerText = adD.c;
-        document.getElementById('adsE').innerText = adD.c * 2;
-        updateTaskProgress('watchad', 1);
-        showToast("🪙 Ad watched — reward will be credited by our server.");
+// This calls our own secure server endpoint (/api/watch-ad) instead of
+// touching the coins field directly — the database rules block direct
+// client writes to /coins, and that's intentional (see database.rules.json).
+// The server verifies the user's identity and credits coins safely.
+async function watchAd() {
+    if (!currentUser) { showToast("⚠️ Please log in first"); return; }
+
+    showAd(async () => {
+        try {
+            const idToken = await auth.currentUser.getIdToken();
+            const resp = await fetch('/api/watch-ad', {
+                method: 'POST',
+                headers: {
+                    'Authorization': 'Bearer ' + idToken,
+                    'Content-Type': 'application/json'
+                }
+            });
+            const data = await resp.json();
+
+            if (!resp.ok) {
+                showToast('⚠️ ' + (data.error || 'Could not credit coins'));
+                return;
+            }
+
+            coins = data.newCoinBalance;
+            currentUser.coins = coins;
+            document.getElementById('navC').innerText = coins;
+            document.getElementById('adsW').innerText = data.adsWatchedToday;
+            document.getElementById('adsE').innerText = data.adsWatchedToday * 2;
+            updateTaskProgress('watchad', 1);
+            showToast(`🪙 +2 Coins credited!`);
+        } catch (err) {
+            showToast("⚠️ Network error — try again");
+        }
     }, 6);
 }
 
