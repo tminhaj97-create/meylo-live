@@ -236,7 +236,13 @@ function swipeR() {
         const p = onlineUsers[dI];
         dI++; loadCard();
         showToast("💖 Match with " + p.name.split(',')[0]);
-        updateTaskProgress('likes', 1);
+        // Record the like server-side (one entry per target per day, can't be
+        // overwritten — see database.rules.json). This is what /api/claim-task
+        // actually counts, instead of trusting a client-side counter.
+        if (currentUser && currentUser.uid && p.id) {
+            const today = new Date().toISOString().slice(0, 10);
+            db.ref(`likesLog/${currentUser.uid}/${today}/${p.id}`).set(true).catch(() => {});
+        }
         selChat(p);
     }
 }
@@ -663,19 +669,46 @@ function updateTaskProgress(taskId, amt) {
     renderTasks();
 }
 
-// NOTE: like the coin store, claiming coin rewards from tasks should really
-// happen via a Cloud Function that checks task completion server-side and
-// then increments /users/$uid/coins itself. Client-side coin writes are
-// blocked by database.rules.json, so this local increment is for UI/demo
-// purposes only until that function exists — it will not persist to coins
-// in the database.
-function claimTask(taskId) {
+// Calls our secure /api/claim-task endpoint, which independently checks the
+// REAL database data (messages sent, likes recorded, bio saved) before
+// paying out — it never trusts the progress numbers shown in this browser.
+async function claimTask(taskId) {
     const t = dailyTasks[taskId];
-    if (t && !t.claimed && t.progress >= t.target) {
-        t.claimed = true;
+    if (!t || t.claimed) return;
+
+    try {
+        const idToken = await auth.currentUser.getIdToken();
+        const resp = await fetch('/api/claim-task', {
+            method: 'POST',
+            headers: {
+                'Authorization': 'Bearer ' + idToken,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ taskId })
+        });
+        const data = await resp.json();
+
+        if (!resp.ok) {
+            // Server disagrees that this task is complete (or already claimed).
+            // Re-sync the local progress bar to match reality.
+            if (typeof data.progress === 'number') {
+                dailyTasks[taskId].progress = data.progress;
+                localStorage.setItem('meylo_tasks', JSON.stringify(dailyTasks));
+                renderTasks();
+            }
+            showToast('⚠️ ' + (data.error || 'Could not claim reward'));
+            return;
+        }
+
+        dailyTasks[taskId].claimed = true;
         localStorage.setItem('meylo_tasks', JSON.stringify(dailyTasks));
+        coins = data.newCoinBalance;
+        currentUser.coins = coins;
+        document.getElementById('navC').innerText = coins;
         renderTasks();
-        showToast(`🪙 Reward queued — coins are credited by our server once task verification is live.`);
+        showToast(`🪙 +${data.reward} Coins claimed!`);
+    } catch (err) {
+        showToast('⚠️ Network error — try again');
     }
 }
 
