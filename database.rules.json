@@ -50,6 +50,32 @@
         ".read": "auth != null && auth.uid === $uid",
         ".write": false
       }
+    },
+    "visitsLog": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        "$day": {
+          "$targetId": {
+            ".write": "auth != null && auth.uid === $uid && !data.exists()",
+            ".validate": "newData.val() === true"
+          }
+        }
+      }
+    },
+    "passportLog": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        "$day": {
+          ".write": "auth != null && auth.uid === $uid && !data.exists()",
+          ".validate": "newData.val() === true"
+        }
+      }
+    },
+    "giftsSentLog": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": false
+      }
     }
   }
 }
