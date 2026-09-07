@@ -35,23 +35,23 @@ function escapeHTML(str) {
         .replace(/'/g, '&#039;');
 }
 
-let dailyTasks = JSON.parse(localStorage.getItem('meylo_tasks')) || {
-    date: todayStr,
-    login: { progress: 1, target: 1, claimed: false, reward: 5, icon: 'fa-calendar-check', title: 'Daily Login', desc: 'Open Meylo daily' },
-    profile: { progress: 0, target: 1, claimed: false, reward: 5, icon: 'fa-user-edit', title: 'Complete Profile', desc: 'Set your profile bio' },
-    messages: { progress: 0, target: 3, claimed: false, reward: 5, icon: 'fa-paper-plane', title: 'Send 3 Messages', desc: 'Chat with matches' },
-    likes: { progress: 0, target: 5, claimed: false, reward: 5, icon: 'fa-heart', title: 'Like 5 Profiles', desc: 'Swipe on discover' },
-    watchad: { progress: 0, target: 1, claimed: false, reward: 5, icon: 'fa-ad', title: 'Watch 1 Ad', desc: 'Watch a video ad' }
-};
-if (dailyTasks.date !== todayStr) {
-    dailyTasks = {
+function defaultDailyTasks() {
+    return {
         date: todayStr,
         login: { progress: 1, target: 1, claimed: false, reward: 5, icon: 'fa-calendar-check', title: 'Daily Login', desc: 'Open Meylo daily' },
         profile: { progress: 0, target: 1, claimed: false, reward: 5, icon: 'fa-user-edit', title: 'Complete Profile', desc: 'Set your profile bio' },
         messages: { progress: 0, target: 3, claimed: false, reward: 5, icon: 'fa-paper-plane', title: 'Send 3 Messages', desc: 'Chat with matches' },
         likes: { progress: 0, target: 5, claimed: false, reward: 5, icon: 'fa-heart', title: 'Like 5 Profiles', desc: 'Swipe on discover' },
-        watchad: { progress: 0, target: 1, claimed: false, reward: 5, icon: 'fa-ad', title: 'Watch 1 Ad', desc: 'Watch a video ad' }
+        watchad: { progress: 0, target: 1, claimed: false, reward: 5, icon: 'fa-ad', title: 'Watch 1 Ad', desc: 'Watch a video ad' },
+        visit3: { progress: 0, target: 3, claimed: false, reward: 5, icon: 'fa-eye', title: 'Visit 3 Profiles', desc: 'Check out other profiles' },
+        passport: { progress: 0, target: 1, claimed: false, reward: 5, icon: 'fa-plane', title: 'Use Passport', desc: 'Browse another city' },
+        sendgift: { progress: 0, target: 1, claimed: false, reward: 5, icon: 'fa-gift', title: 'Send a Gift', desc: 'Send a virtual gift to a match' }
     };
+}
+
+let dailyTasks = JSON.parse(localStorage.getItem('meylo_tasks')) || defaultDailyTasks();
+if (dailyTasks.date !== todayStr) {
+    dailyTasks = defaultDailyTasks();
     localStorage.setItem('meylo_tasks', JSON.stringify(dailyTasks));
 }
 
@@ -132,6 +132,7 @@ function initPortal() {
 
     renderProf();
     renderTasks();
+    updateSpinUI();
 }
 
 function syncWithFirebase() {
@@ -351,6 +352,7 @@ async function sendGift(giftId) {
         currentUser.coins = coins;
         document.getElementById('navC').innerText = coins;
         closeMo('giftMo');
+        updateTaskProgress('sendgift', 1);
         showToast(`🎁 Gift sent!`);
     } catch (err) {
         showToast('⚠️ Network error — try again');
@@ -381,6 +383,11 @@ function openV(id) {
     const p = onlineUsers.find(x => x.id === id) || onlineUsers[0];
     if (!p) return;
     curVisUser = p; visPicIdx = 0;
+    if (currentUser && currentUser.uid && p.id) {
+        const today = new Date().toISOString().slice(0, 10);
+        db.ref(`visitsLog/${currentUser.uid}/${today}/${p.id}`).set(true).catch(() => {});
+        updateTaskProgress('visit3', 1);
+    }
     document.getElementById('vNm').innerHTML = `${escapeHTML(p.name)} <i class="fas fa-check-circle vbi"></i>`;
     document.getElementById('vSub').innerText = `📍 ${p.city || 'Global'}`;
     document.getElementById('vBio').innerText = p.bio || 'No bio added.';
@@ -784,7 +791,7 @@ function logout() {
 // ---- TASKS ----
 function renderTasks() {
     const box = document.getElementById('tasksBox');
-    const taskKeys = ['login', 'profile', 'messages', 'likes', 'watchad'];
+    const taskKeys = ['login', 'profile', 'messages', 'likes', 'watchad', 'visit3', 'passport', 'sendgift'];
     box.innerHTML = taskKeys.map(key => {
         const t = dailyTasks[key];
         const pct = Math.min((t.progress / t.target) * 100, 100);
@@ -857,10 +864,14 @@ async function claimTask(taskId) {
 
 // ---- ADS ----
 let adTimer = null;
+let adCountdownDone = false; // only true once the full duration has actually elapsed
+
 function showAd(cb, duration = null) {
     if (vip) { if (cb) cb(); return; }
+    adCountdownDone = false;
     document.getElementById('adOv').classList.add('show');
     document.getElementById('adSk').classList.remove('visible');
+    document.getElementById('adContinueBtn').style.display = 'none';
     let cd = duration || (Math.floor(Math.random() * 6) + 5);
     document.getElementById('adTm').innerText = cd;
     clearInterval(adTimer);
@@ -869,15 +880,25 @@ function showAd(cb, duration = null) {
         document.getElementById('adTm').innerText = cd;
         if (cd <= 0) {
             clearInterval(adTimer);
+            adCountdownDone = true;
             document.getElementById('adSk').classList.add('visible');
+            document.getElementById('adContinueBtn').style.display = 'inline-flex';
         }
     }, 1000);
     window._adCb = cb || null;
 }
 
 function closeAd() {
-    clearInterval(adTimer);
+    // This is the fix for the "claim reward before the ad finishes" bug:
+    // closing early now just dismisses the ad with NO reward. The callback
+    // (which is what actually credits coins / unlocks the next action) only
+    // ever runs if the countdown genuinely reached zero.
     document.getElementById('adOv').classList.remove('show');
+    clearInterval(adTimer);
+    if (!adCountdownDone) {
+        window._adCb = null;
+        return;
+    }
     if (window._adCb) { window._adCb(); window._adCb = null; }
 }
 
@@ -934,17 +955,70 @@ function setPassportCity(city) {
     currentUser.city = city;
     document.getElementById('currentPassportLocation').innerText = `Current Location: ${city}`;
     syncWithFirebase();
+    const today = new Date().toISOString().slice(0, 10);
+    db.ref(`passportLog/${currentUser.uid}/${today}`).set(true).catch(() => {});
+    updateTaskProgress('passport', 1);
     showToast(`✈️ Passport set to ${city}`);
 }
 
-function doSpin() {
-    if (spD.free) { showToast("⏳ Come back tomorrow for a free spin!"); return; }
+const MAX_BONUS_SPINS = 5;
+
+function playSpinAnimation(onDone) {
     const wheel = document.getElementById('spinW');
     const deg = 1440 + Math.floor(Math.random() * 360);
     wheel.style.transform = `rotate(${deg}deg)`;
+    setTimeout(() => {
+        showToast("🎉 You won a prize! (server-verified rewards coming soon)");
+        if (onDone) onDone();
+    }, 4200);
+}
+
+function updateSpinUI() {
+    const freeBtn = document.getElementById('spinBtn');
+    const bonusBtn = document.getElementById('bonusSpinBtn');
+    const status = document.getElementById('spinSt');
+
+    if (!spD.free) {
+        freeBtn.style.display = 'inline-flex';
+        bonusBtn.style.display = 'none';
+        status.innerText = '1 Free spin available today!';
+    } else if (spD.extra < MAX_BONUS_SPINS) {
+        freeBtn.style.display = 'none';
+        bonusBtn.style.display = 'inline-flex';
+        bonusBtn.disabled = false;
+        bonusBtn.style.opacity = '1';
+        status.innerText = `Bonus spins used: ${spD.extra}/${MAX_BONUS_SPINS} — watch an ad for another`;
+    } else {
+        freeBtn.style.display = 'none';
+        bonusBtn.style.display = 'inline-flex';
+        bonusBtn.disabled = true;
+        bonusBtn.style.opacity = '0.4';
+        status.innerText = `All spins used today (1 free + ${MAX_BONUS_SPINS} bonus) — come back tomorrow!`;
+    }
+}
+
+function doSpin() {
+    if (spD.free) { showToast("⏳ Use a bonus spin by watching an ad, or come back tomorrow!"); return; }
     spD.free = true;
     localStorage.setItem('meylo_spin', JSON.stringify(spD));
-    setTimeout(() => showToast("🎉 You won a prize! (server-verified rewards coming soon)"), 4200);
+    playSpinAnimation(updateSpinUI);
+    updateSpinUI();
+}
+
+function doBonusSpin() {
+    if (!spD.free) { showToast("⚠️ Use your free spin first!"); return; }
+    if (spD.extra >= MAX_BONUS_SPINS) { showToast("⏳ No bonus spins left today — come back tomorrow!"); return; }
+
+    // The spin itself only happens AFTER the ad genuinely finishes — showAd()
+    // only calls this callback once the countdown has actually completed
+    // (see the closeAd() early-exit guard), so this can't be triggered by
+    // dismissing the ad early.
+    showAd(() => {
+        spD.extra++;
+        localStorage.setItem('meylo_spin', JSON.stringify(spD));
+        playSpinAnimation(updateSpinUI);
+        updateSpinUI();
+    }, 6);
 }
 
 function openBoostModal() { showToast("🚀 Boost — coming soon once payments are live."); }
