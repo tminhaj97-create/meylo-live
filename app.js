@@ -81,6 +81,8 @@ window.onload = () => {
         if (window.scrollY > 50) nav.classList.add('scrolled');
         else nav.classList.remove('scrolled');
     });
+    const dobInput = document.getElementById('rDob');
+    if (dobInput) dobInput.max = new Date().toISOString().slice(0, 10);
 };
 
 // ---- REAL AUTHENTICATION STATE ----
@@ -152,6 +154,7 @@ function syncWithFirebase() {
             zodiac: currentUser.zodiac || '',
             occupation: currentUser.occupation || '',
             interests: currentUser.interests || [],
+            voiceIntro: currentUser.voiceIntro || null,
             lastSeen: Date.now()
         });
     }
@@ -304,14 +307,54 @@ function listenToFirebaseMessages() {
             Object.keys(data).forEach(key => {
                 const msg = data[key];
                 const isMe = msg.senderId === currentUser.uid;
-                // CRITICAL: message text is user-typed — always escape before innerHTML
-                msgsBox.innerHTML += `<div class="chat-bubble ${isMe ? 'outgoing' : 'incoming'}">${escapeHTML(msg.text)}</div>`;
+                if (msg.type === 'gift') {
+                    // Gift messages are pushed by our server (/api/send-gift) only
+                    // after it verified and deducted real coins — never trust a
+                    // gift message that could have been written by a client directly.
+                    msgsBox.innerHTML += `<div class="chat-bubble ${isMe ? 'outgoing' : 'incoming'}" style="background:${isMe ? 'var(--accent)' : '#241a08'};border:1px solid var(--gold)">🎁 ${isMe ? 'You sent' : 'Sent'} a ${escapeHTML(msg.giftName || 'gift')}</div>`;
+                } else {
+                    // CRITICAL: message text is user-typed — always escape before innerHTML
+                    msgsBox.innerHTML += `<div class="chat-bubble ${isMe ? 'outgoing' : 'incoming'}">${escapeHTML(msg.text)}</div>`;
+                }
             });
             msgsBox.scrollTop = msgsBox.scrollHeight;
         } else {
             msgsBox.innerHTML = '<div style="text-align:center;color:#666;font-size:12px;margin-top:20px">Say hello to start conversation! 👋</div>';
         }
     });
+}
+
+// ---- VIRTUAL GIFTING ----
+// Sending a gift costs coins, so — just like watch-ad and claim-task — this
+// MUST go through the server. The server verifies the sender's real coin
+// balance, deducts atomically, and is the one that writes the gift message
+// to the chat, so a client can never fake "I sent a diamond" without paying.
+function openGiftPicker() {
+    if (!activeChatUser) { showToast('⚠️ Open a chat first'); return; }
+    document.getElementById('giftCoinBalance').innerText = coins;
+    history.pushState({ modal: 'gift' }, '');
+    openMo('giftMo');
+}
+
+async function sendGift(giftId) {
+    if (!activeChatUser) return;
+    try {
+        const idToken = await auth.currentUser.getIdToken();
+        const resp = await fetch('/api/send-gift', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + idToken, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ targetUid: activeChatUser.id, giftId: giftId })
+        });
+        const data = await resp.json();
+        if (!resp.ok) { showToast('⚠️ ' + (data.error || 'Could not send gift')); return; }
+        coins = data.newCoinBalance;
+        currentUser.coins = coins;
+        document.getElementById('navC').innerText = coins;
+        closeMo('giftMo');
+        showToast(`🎁 Gift sent!`);
+    } catch (err) {
+        showToast('⚠️ Network error — try again');
+    }
 }
 
 function sendM() {
@@ -341,6 +384,9 @@ function openV(id) {
     document.getElementById('vNm').innerHTML = `${escapeHTML(p.name)} <i class="fas fa-check-circle vbi"></i>`;
     document.getElementById('vSub').innerText = `📍 ${p.city || 'Global'}`;
     document.getElementById('vBio').innerText = p.bio || 'No bio added.';
+    const vVp = document.getElementById('vVoicePlayer');
+    if (p.voiceIntro) { vVp.src = p.voiceIntro; vVp.style.display = 'block'; }
+    else { vVp.style.display = 'none'; }
     renderVPic();
 
     let d = '';
@@ -376,6 +422,9 @@ function renderProf() {
     document.getElementById('myNm').innerHTML = `${escapeHTML(currentUser.name)}, ${escapeHTML(currentUser.age)} <i class="fas fa-check-circle vbi"></i>`;
     document.getElementById('myMeta').innerText = `📍 ${currentUser.city || 'Global'}`;
     document.getElementById('myBio').innerText = currentUser.bio || 'No bio added yet. Tap Edit to add!';
+    const myVp = document.getElementById('myVoicePlayer');
+    if (currentUser.voiceIntro) { myVp.src = currentUser.voiceIntro; myVp.style.display = 'block'; }
+    else { myVp.style.display = 'none'; }
     document.getElementById('myAv').src = currentUser.avatar || ('https://via.placeholder.com/80/ff2d6f/fff?text=' + encodeURIComponent(currentUser.name[0] || '?'));
 
     const gal = currentUser.gallery || [];
@@ -437,6 +486,64 @@ function changeMainPhoto(e) {
     r.readAsDataURL(f);
 }
 
+// ---- VOICE INTRO RECORDING ----
+let voiceMediaRecorder = null, voiceChunks = [], voiceStream = null, voiceRecTimer = null, voiceRecSeconds = 0;
+let pendingVoiceDataUrl = null; // holds the just-recorded clip until saved
+const VOICE_MAX_SECONDS = 15;
+
+async function toggleVoiceRecording() {
+    if (voiceMediaRecorder && voiceMediaRecorder.state === 'recording') {
+        voiceMediaRecorder.stop();
+        return;
+    }
+    try {
+        voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        voiceChunks = [];
+        voiceMediaRecorder = new MediaRecorder(voiceStream);
+        voiceMediaRecorder.ondataavailable = e => { if (e.data.size > 0) voiceChunks.push(e.data); };
+        voiceMediaRecorder.onstop = async () => {
+            clearInterval(voiceRecTimer);
+            voiceStream.getTracks().forEach(t => t.stop());
+            const blob = new Blob(voiceChunks, { type: 'audio/webm' });
+            const reader = new FileReader();
+            reader.onload = () => {
+                pendingVoiceDataUrl = reader.result;
+                const player = document.getElementById('voicePreview');
+                player.src = pendingVoiceDataUrl;
+                player.style.display = 'block';
+                document.getElementById('voiceRecStatus').innerText = 'Recorded — click Save Details to keep it';
+                document.getElementById('voiceRecBtn').innerHTML = '<i class="fas fa-microphone"></i> Re-record';
+                document.getElementById('voiceDeleteBtn').style.display = 'inline-block';
+            };
+            reader.readAsDataURL(blob);
+        };
+
+        voiceMediaRecorder.start();
+        voiceRecSeconds = 0;
+        document.getElementById('voiceRecBtn').innerHTML = '<i class="fas fa-stop"></i> Stop';
+        document.getElementById('voiceRecStatus').innerText = `Recording... 0/${VOICE_MAX_SECONDS}s`;
+        voiceRecTimer = setInterval(() => {
+            voiceRecSeconds++;
+            document.getElementById('voiceRecStatus').innerText = `Recording... ${voiceRecSeconds}/${VOICE_MAX_SECONDS}s`;
+            if (voiceRecSeconds >= VOICE_MAX_SECONDS) voiceMediaRecorder.stop();
+        }, 1000);
+    } catch (e) {
+        showToast('⚠️ Microphone access denied or unavailable');
+    }
+}
+
+function deleteVoiceIntro() {
+    pendingVoiceDataUrl = null;
+    currentUser.voiceIntro = null;
+    document.getElementById('voicePreview').style.display = 'none';
+    document.getElementById('voiceDeleteBtn').style.display = 'none';
+    document.getElementById('voiceRecStatus').innerText = 'No recording yet';
+    document.getElementById('voiceRecBtn').innerHTML = '<i class="fas fa-microphone"></i> Record';
+    syncWithFirebase();
+    renderProf();
+    showToast('🗑️ Voice intro removed');
+}
+
 function delP(idx) {
     currentUser.gallery.splice(idx, 1);
     currentUser.avatar = currentUser.gallery[0] || '';
@@ -455,6 +562,22 @@ function openEdit() {
     document.getElementById('eZ').value = currentUser.zodiac || '';
     document.getElementById('eJ').value = currentUser.occupation || '';
     document.getElementById('eC').value = currentUser.city || '';
+
+    // Voice intro UI reset
+    pendingVoiceDataUrl = null;
+    const player = document.getElementById('voicePreview');
+    if (currentUser.voiceIntro) {
+        player.src = currentUser.voiceIntro;
+        player.style.display = 'block';
+        document.getElementById('voiceRecStatus').innerText = 'Saved voice intro';
+        document.getElementById('voiceDeleteBtn').style.display = 'inline-block';
+    } else {
+        player.style.display = 'none';
+        document.getElementById('voiceRecStatus').innerText = 'No recording yet';
+        document.getElementById('voiceDeleteBtn').style.display = 'none';
+    }
+    document.getElementById('voiceRecBtn').innerHTML = '<i class="fas fa-microphone"></i> Record';
+
     openMo('editMo');
 }
 
@@ -466,6 +589,11 @@ function saveProf() {
     currentUser.zodiac = document.getElementById('eZ').value;
     currentUser.occupation = document.getElementById('eJ').value.trim().slice(0, 60);
     currentUser.city = document.getElementById('eC').value.trim().slice(0, 60);
+
+    if (pendingVoiceDataUrl) {
+        currentUser.voiceIntro = pendingVoiceDataUrl;
+        pendingVoiceDataUrl = null;
+    }
 
     const ints = [];
     document.querySelectorAll('#eIntBox .interest-tag.selected').forEach(t => ints.push(t.innerText));
@@ -493,7 +621,7 @@ let acStream = null, acTimer = null, acSec = 0;
 function startAutoMatch() {
     history.pushState({ modal: 'autoCall' }, '');
     const rand = onlineUsers[Math.floor(Math.random() * onlineUsers.length)] || { name: 'Match', avatar: 'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=500&h=700&fit=crop' };
-    document.getElementById('acNm').innerText = `Live with ${rand.name.split(',')[0]}`;
+    document.getElementById('acNm').innerText = `Demo Preview — ${rand.name.split(',')[0]}`;
     document.getElementById('acRemote').src = rand.avatar;
     openMo('autoCallMo');
     startAcCam();
@@ -538,7 +666,7 @@ function openCallModal(p, type) {
     history.pushState({ modal: 'call' }, '');
     showAd(() => {
         clType = type;
-        document.getElementById('clNm').innerText = `Live with ${p.name.split(',')[0]}`;
+        document.getElementById('clNm').innerText = `Demo Preview — ${p.name.split(',')[0]}`;
         const pic = p.avatar || '';
         if (type === 'video') {
             document.getElementById('clVidUI').style.display = 'flex';
@@ -588,13 +716,27 @@ document.addEventListener('click', e => { if (!e.target.closest('.menu-anchor'))
 // ---- AUTH: REGISTER / LOGIN / LOGOUT ----
 async function submitReg() {
     const name = document.getElementById('rNm').value.trim().slice(0, 60);
-    const age = parseInt(document.getElementById('rAge').value);
+    const dobStr = document.getElementById('rDob').value;
     const gender = document.getElementById('rGen').value;
     const email = document.getElementById('rMail').value.trim();
     const password = document.getElementById('rPass').value;
 
     if (!name) { showToast("⚠️ Enter your name"); return; }
-    if (isNaN(age) || age < 18) { showToast("⚠️ Must be 18+!"); return; }
+    if (!dobStr) { showToast("⚠️ Enter your date of birth"); return; }
+
+    const dob = new Date(dobStr + 'T00:00:00');
+    if (isNaN(dob.getTime()) || dob > new Date()) { showToast("⚠️ Enter a valid date of birth"); return; }
+
+    // Compute exact age from the birth date rather than trusting a
+    // self-typed number — still self-reported (not ID-verified), but this
+    // at least keeps the stored age internally consistent with the DOB.
+    const today = new Date();
+    let age = today.getFullYear() - dob.getFullYear();
+    const hasHadBirthdayThisYear = (today.getMonth() > dob.getMonth()) ||
+        (today.getMonth() === dob.getMonth() && today.getDate() >= dob.getDate());
+    if (!hasHadBirthdayThisYear) age--;
+
+    if (age < 18) { showToast("⚠️ Must be 18+!"); return; }
     if (!email) { showToast("⚠️ Enter a valid email"); return; }
     if (!password || password.length < 6) { showToast("⚠️ Password must be 6+ characters"); return; }
 
@@ -605,6 +747,7 @@ async function submitReg() {
             id: uid,
             name: name,
             age: age,
+            dob: dobStr,
             gender: gender,
             city: 'Dhaka',
             coins: 50,
