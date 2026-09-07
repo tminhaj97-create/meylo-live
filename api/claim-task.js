@@ -24,7 +24,11 @@ const TASKS = {
     login: { reward: 5, target: 1 },
     profile: { reward: 5, target: 1 },
     messages: { reward: 5, target: 3 },
-    likes: { reward: 5, target: 5 }
+    likes: { reward: 5, target: 5 },
+    watchad: { reward: 5, target: 1 },
+    visit3: { reward: 5, target: 3 },
+    passport: { reward: 5, target: 1 },
+    sendgift: { reward: 5, target: 1 }
 };
 
 function todayStr() {
@@ -66,6 +70,31 @@ async function hasProfileBio(db, uid) {
     return !!(bio && String(bio).trim().length > 0);
 }
 
+async function countTodayAdsWatched(db, uid, day) {
+    // Written by /api/watch-ad.js — a real server-side counter, not
+    // something the client can inflate directly.
+    const snap = await db.ref(`adWatchLog/${uid}/${day}`).once('value');
+    return snap.val() || 0;
+}
+
+async function countTodayVisits(db, uid, day) {
+    const snap = await db.ref(`visitsLog/${uid}/${day}`).once('value');
+    const data = snap.val() || {};
+    return Object.keys(data).length;
+}
+
+async function hasUsedPassportToday(db, uid, day) {
+    const snap = await db.ref(`passportLog/${uid}/${day}`).once('value');
+    return !!snap.val();
+}
+
+async function countTodayGiftsSent(db, uid, day) {
+    // Written by /api/send-gift.js — server-side, so this can't be faked
+    // by a client claiming to have sent a gift without paying for it.
+    const snap = await db.ref(`giftsSentLog/${uid}/${day}`).once('value');
+    return snap.val() || 0;
+}
+
 module.exports = async (req, res) => {
     if (req.method !== 'POST') {
         return res.status(405).json({ error: 'Method not allowed' });
@@ -98,6 +127,10 @@ module.exports = async (req, res) => {
         if (taskId === 'profile') progress = (await hasProfileBio(db, uid)) ? 1 : 0;
         if (taskId === 'messages') progress = await countTodayMessagesSent(db, uid, day);
         if (taskId === 'likes') progress = await countTodayLikes(db, uid, day);
+        if (taskId === 'watchad') progress = await countTodayAdsWatched(db, uid, day);
+        if (taskId === 'visit3') progress = await countTodayVisits(db, uid, day);
+        if (taskId === 'passport') progress = (await hasUsedPassportToday(db, uid, day)) ? 1 : 0;
+        if (taskId === 'sendgift') progress = await countTodayGiftsSent(db, uid, day);
 
         const target = TASKS[taskId].target;
         if (progress < target) {
