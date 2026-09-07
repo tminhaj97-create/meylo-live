@@ -26,7 +26,9 @@ if (!admin.apps.length) {
 }
 
 const COINS_PER_AD = 2;
-const MAX_ADS_PER_DAY = 20; // adjust as you like
+// No daily cap — the person watching ads and earning coins for it is fine;
+// we still log each watch (adWatchLog) so the "Watch 1 Ad" daily task and
+// any future analytics can read real data.
 
 module.exports = async (req, res) => {
     if (req.method !== 'POST') {
@@ -52,16 +54,8 @@ module.exports = async (req, res) => {
 
     try {
         const result = await db.ref(`adWatchLog/${uid}/${today}`).transaction(current => {
-            const count = current || 0;
-            if (count >= MAX_ADS_PER_DAY) {
-                return; // abort transaction — daily limit reached
-            }
-            return count + 1;
+            return (current || 0) + 1;
         });
-
-        if (!result.committed) {
-            return res.status(429).json({ error: 'Daily ad-watch limit reached' });
-        }
 
         // Safely increment coins using an atomic transaction so concurrent
         // requests can never race each other into an inconsistent value.
