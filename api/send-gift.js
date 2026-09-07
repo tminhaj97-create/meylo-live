@@ -84,6 +84,9 @@ module.exports = async (req, res) => {
             timestamp: Date.now()
         });
 
+        const today = new Date().toISOString().slice(0, 10);
+        await db.ref(`giftsSentLog/${uid}/${today}`).transaction(current => (current || 0) + 1);
+
         return res.status(200).json({
             success: true,
             newCoinBalance: coinsResult.snapshot.val()
