@@ -400,6 +400,24 @@
 </div>
 
 <!-- GIFT PICKER MODAL -->
+<!-- REPORT MODAL -->
+<div class="modal-overlay" id="reportMo">
+    <div class="modal-box">
+        <button style="position:absolute;top:10px;right:10px;background:none;border:none;color:#aaa;cursor:pointer;font-size:16px" onclick="closeMo('reportMo')"><i class="fas fa-times"></i></button>
+        <h2 style="font-family:'Syne',sans-serif;font-size:18px;text-align:center;margin-bottom:4px">Report <span id="reportTargetName">this user</span></h2>
+        <p style="font-size:11px;color:var(--fg-muted);text-align:center;margin-bottom:14px">Select a reason — our team will review this.</p>
+        <div id="reportReasons" style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px">
+            <span class="interest-tag" data-reason="harassment" onclick="document.querySelectorAll('#reportReasons .interest-tag').forEach(t=>t.classList.remove('selected'));this.classList.add('selected')" style="text-align:left;margin:0">🚫 Harassment or abusive behavior</span>
+            <span class="interest-tag" data-reason="fake_profile" onclick="document.querySelectorAll('#reportReasons .interest-tag').forEach(t=>t.classList.remove('selected'));this.classList.add('selected')" style="text-align:left;margin:0">🎭 Fake profile / impersonation</span>
+            <span class="interest-tag" data-reason="inappropriate_content" onclick="document.querySelectorAll('#reportReasons .interest-tag').forEach(t=>t.classList.remove('selected'));this.classList.add('selected')" style="text-align:left;margin:0">🖼️ Inappropriate photos or content</span>
+            <span class="interest-tag" data-reason="underage" onclick="document.querySelectorAll('#reportReasons .interest-tag').forEach(t=>t.classList.remove('selected'));this.classList.add('selected')" style="text-align:left;margin:0">⚠️ Appears to be under 18</span>
+            <span class="interest-tag" data-reason="scam" onclick="document.querySelectorAll('#reportReasons .interest-tag').forEach(t=>t.classList.remove('selected'));this.classList.add('selected')" style="text-align:left;margin:0">💰 Scam or solicitation</span>
+            <span class="interest-tag" data-reason="other" onclick="document.querySelectorAll('#reportReasons .interest-tag').forEach(t=>t.classList.remove('selected'));this.classList.add('selected')" style="text-align:left;margin:0">Other</span>
+        </div>
+        <button class="btn-primary" style="width:100%;justify-content:center" onclick="submitReport()"><i class="fas fa-flag"></i> Submit Report</button>
+    </div>
+</div>
+
 <div class="modal-overlay" id="giftMo">
     <div class="modal-box">
         <button style="position:absolute;top:10px;right:10px;background:none;border:none;color:#aaa;cursor:pointer;font-size:16px" onclick="closeMo('giftMo')"><i class="fas fa-times"></i></button>
@@ -432,6 +450,10 @@
             <div style="display:flex;gap:10px;margin-top:16px">
                 <button class="btn-secondary" style="flex:1" onclick="vAct('chat')"><i class="fas fa-comments"></i> Message</button>
                 <button class="btn-primary" style="flex:1" onclick="vAct('video')"><i class="fas fa-video"></i> Video Call</button>
+            </div>
+            <div style="display:flex;gap:10px;margin-top:10px">
+                <button class="btn-secondary" style="flex:1;font-size:11px;padding:10px" onclick="openReportModal(curVisUser.id, curVisUser.name)"><i class="fas fa-flag"></i> Report</button>
+                <button class="btn-secondary" style="flex:1;font-size:11px;padding:10px;color:#f44336;border-color:#f44336" onclick="blockUser(curVisUser.id)"><i class="fas fa-ban"></i> Block</button>
             </div>
         </div>
     </div>
