@@ -914,40 +914,45 @@ function closeAd() {
     if (window._adCb) { window._adCb(); window._adCb = null; }
 }
 
+// Calls /api/watch-ad and applies the result to the UI. Returns the response
+// data on success, or null on failure (after showing an error toast) — used
+// both by the Daily Tasks "Watch Ad" button and by Lucky Spin's bonus spins,
+// so every ad watch anywhere in the app goes through the same real, counted
+// server record (adWatchLog) rather than each feature tracking it separately.
+async function watchAdAndCreditCoins() {
+    try {
+        const idToken = await auth.currentUser.getIdToken();
+        const resp = await fetch('/api/watch-ad', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + idToken, 'Content-Type': 'application/json' }
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            showToast('⚠️ ' + (data.error || 'Could not credit coins'));
+            return null;
+        }
+        coins = data.newCoinBalance;
+        currentUser.coins = coins;
+        document.getElementById('navC').innerText = coins;
+        document.getElementById('adsW').innerText = data.adsWatchedToday;
+        document.getElementById('adsE').innerText = data.adsWatchedToday * 2;
+        updateTaskProgress('watchad', 1);
+        return data;
+    } catch (err) {
+        showToast("⚠️ Network error — try again");
+        return null;
+    }
+}
+
 // This calls our own secure server endpoint (/api/watch-ad) instead of
 // touching the coins field directly — the database rules block direct
 // client writes to /coins, and that's intentional (see database.rules.json).
 // The server verifies the user's identity and credits coins safely.
 async function watchAd() {
     if (!currentUser) { showToast("⚠️ Please log in first"); return; }
-
     showAd(async () => {
-        try {
-            const idToken = await auth.currentUser.getIdToken();
-            const resp = await fetch('/api/watch-ad', {
-                method: 'POST',
-                headers: {
-                    'Authorization': 'Bearer ' + idToken,
-                    'Content-Type': 'application/json'
-                }
-            });
-            const data = await resp.json();
-
-            if (!resp.ok) {
-                showToast('⚠️ ' + (data.error || 'Could not credit coins'));
-                return;
-            }
-
-            coins = data.newCoinBalance;
-            currentUser.coins = coins;
-            document.getElementById('navC').innerText = coins;
-            document.getElementById('adsW').innerText = data.adsWatchedToday;
-            document.getElementById('adsE').innerText = data.adsWatchedToday * 2;
-            updateTaskProgress('watchad', 1);
-            showToast(`🪙 +2 Coins credited!`);
-        } catch (err) {
-            showToast("⚠️ Network error — try again");
-        }
+        const data = await watchAdAndCreditCoins();
+        if (data) showToast(`🪙 +2 Coins credited!`);
     }, 6);
 }
 
@@ -974,26 +979,19 @@ function setPassportCity(city) {
 }
 
 const MAX_BONUS_SPINS = 5;
+let spinInProgress = false;
 
 function playSpinAnimation(onDone) {
     const wheel = document.getElementById('spinW');
     const deg = 1440 + Math.floor(Math.random() * 360);
     wheel.style.transform = `rotate(${deg}deg)`;
-    setTimeout(() => {
-        showToast("🎉 You won a prize! (server-verified rewards coming soon)");
-        if (onDone) onDone();
-    }, 4200);
+    setTimeout(() => { if (onDone) onDone(); }, 4200);
 }
 
 function updateSpinUI() {
     const freeBtn = document.getElementById('spinBtn');
     const bonusBtn = document.getElementById('bonusSpinBtn');
     const status = document.getElementById('spinSt');
-
-    if (spinInProgress) {
-        freeBtn.disabled = true;
-        bonusBtn.disabled = true;
-    }
 
     if (!spD.free) {
         freeBtn.style.display = 'inline-flex';
@@ -1015,16 +1013,49 @@ function updateSpinUI() {
     }
 }
 
-let spinInProgress = false;
+// Calls our secure /api/spin endpoint, which decides BOTH whether a spin is
+// allowed (based on real ad-watch data) and the prize amount — the wheel
+// animation here is purely cosmetic. `onAllowed` lets the caller update the
+// local (UI-only) spD tracker once the server actually confirms the spin.
+async function performServerSpin(onAllowed) {
+    try {
+        const idToken = await auth.currentUser.getIdToken();
+        const resp = await fetch('/api/spin', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + idToken, 'Content-Type': 'application/json' }
+        });
+        const data = await resp.json();
+
+        if (!resp.ok) {
+            showToast('⚠️ ' + (data.error || 'No spins available'));
+            spinInProgress = false;
+            updateSpinUI();
+            return;
+        }
+
+        playSpinAnimation(() => {
+            coins = data.newCoinBalance;
+            currentUser.coins = coins;
+            document.getElementById('navC').innerText = coins;
+            onAllowed();
+            localStorage.setItem('meylo_spin', JSON.stringify(spD));
+            showToast(`🎉 You won ${data.prizeCoins} coins!`);
+            spinInProgress = false;
+            updateSpinUI();
+        });
+    } catch (err) {
+        showToast('⚠️ Network error — try again');
+        spinInProgress = false;
+        updateSpinUI();
+    }
+}
 
 function doSpin() {
     if (spinInProgress) return;
     if (spD.free) { showToast("⏳ Use a bonus spin by watching an ad, or come back tomorrow!"); return; }
     spinInProgress = true;
-    spD.free = true;
-    localStorage.setItem('meylo_spin', JSON.stringify(spD));
     updateSpinUI();
-    playSpinAnimation(() => { spinInProgress = false; updateSpinUI(); });
+    performServerSpin(() => { spD.free = true; });
 }
 
 function doBonusSpin() {
@@ -1032,16 +1063,17 @@ function doBonusSpin() {
     if (!spD.free) { showToast("⚠️ Use your free spin first!"); return; }
     if (spD.extra >= MAX_BONUS_SPINS) { showToast("⏳ No bonus spins left today — come back tomorrow!"); return; }
     spinInProgress = true;
+    updateSpinUI();
 
-    // The spin itself only happens AFTER the ad genuinely finishes — showAd()
+    // The spin request only fires AFTER the ad genuinely finishes — showAd()
     // only calls this callback once the countdown has actually completed
-    // (see the closeAd() early-exit guard), so this can't be triggered by
-    // dismissing the ad early.
-    showAd(() => {
-        spD.extra++;
-        localStorage.setItem('meylo_spin', JSON.stringify(spD));
-        playSpinAnimation(() => { spinInProgress = false; updateSpinUI(); });
-        updateSpinUI();
+    // (see the closeAd() early-exit guard). Watching the ad here uses the
+    // same real, server-logged ad watch as the Daily Tasks button, which is
+    // exactly what /api/spin checks to decide if a bonus spin is unlocked.
+    showAd(async () => {
+        const adResult = await watchAdAndCreditCoins();
+        if (!adResult) { spinInProgress = false; updateSpinUI(); return; }
+        performServerSpin(() => { spD.extra++; });
     }, 6);
 }
 
