@@ -52,8 +52,19 @@ function defaultDailyTasks() {
 let dailyTasks = JSON.parse(localStorage.getItem('meylo_tasks')) || defaultDailyTasks();
 if (dailyTasks.date !== todayStr) {
     dailyTasks = defaultDailyTasks();
-    localStorage.setItem('meylo_tasks', JSON.stringify(dailyTasks));
+} else {
+    // Merge in any task keys that didn't exist yet in previously-saved data
+    // (e.g. the user already had today's tasks cached before new task types
+    // like visit3/passport/sendgift were added) — without this, renderTasks()
+    // would throw on the missing key and silently fail to render ANY tasks.
+    const template = defaultDailyTasks();
+    Object.keys(template).forEach(key => {
+        if (key !== 'date' && !dailyTasks[key]) {
+            dailyTasks[key] = template[key];
+        }
+    });
 }
+localStorage.setItem('meylo_tasks', JSON.stringify(dailyTasks));
 
 let adD = JSON.parse(localStorage.getItem('meylo_ad_watch')) || { d: todayStr, c: 0 };
 if (adD.d !== todayStr) adD = { d: todayStr, c: 0 };
@@ -794,6 +805,7 @@ function renderTasks() {
     const taskKeys = ['login', 'profile', 'messages', 'likes', 'watchad', 'visit3', 'passport', 'sendgift'];
     box.innerHTML = taskKeys.map(key => {
         const t = dailyTasks[key];
+        if (!t) return ''; // defensive: never let one bad/missing entry blank the whole list
         const pct = Math.min((t.progress / t.target) * 100, 100);
         const done = t.progress >= t.target;
         return `
@@ -978,16 +990,22 @@ function updateSpinUI() {
     const bonusBtn = document.getElementById('bonusSpinBtn');
     const status = document.getElementById('spinSt');
 
+    if (spinInProgress) {
+        freeBtn.disabled = true;
+        bonusBtn.disabled = true;
+    }
+
     if (!spD.free) {
         freeBtn.style.display = 'inline-flex';
+        freeBtn.disabled = spinInProgress;
         bonusBtn.style.display = 'none';
-        status.innerText = '1 Free spin available today!';
+        status.innerText = spinInProgress ? 'Spinning...' : '1 Free spin available today!';
     } else if (spD.extra < MAX_BONUS_SPINS) {
         freeBtn.style.display = 'none';
         bonusBtn.style.display = 'inline-flex';
-        bonusBtn.disabled = false;
-        bonusBtn.style.opacity = '1';
-        status.innerText = `Bonus spins used: ${spD.extra}/${MAX_BONUS_SPINS} — watch an ad for another`;
+        bonusBtn.disabled = spinInProgress;
+        bonusBtn.style.opacity = spinInProgress ? '0.7' : '1';
+        status.innerText = spinInProgress ? 'Spinning...' : `Bonus spins used: ${spD.extra}/${MAX_BONUS_SPINS} — watch an ad for another`;
     } else {
         freeBtn.style.display = 'none';
         bonusBtn.style.display = 'inline-flex';
@@ -997,17 +1015,23 @@ function updateSpinUI() {
     }
 }
 
+let spinInProgress = false;
+
 function doSpin() {
+    if (spinInProgress) return;
     if (spD.free) { showToast("⏳ Use a bonus spin by watching an ad, or come back tomorrow!"); return; }
+    spinInProgress = true;
     spD.free = true;
     localStorage.setItem('meylo_spin', JSON.stringify(spD));
-    playSpinAnimation(updateSpinUI);
     updateSpinUI();
+    playSpinAnimation(() => { spinInProgress = false; updateSpinUI(); });
 }
 
 function doBonusSpin() {
+    if (spinInProgress) return;
     if (!spD.free) { showToast("⚠️ Use your free spin first!"); return; }
     if (spD.extra >= MAX_BONUS_SPINS) { showToast("⏳ No bonus spins left today — come back tomorrow!"); return; }
+    spinInProgress = true;
 
     // The spin itself only happens AFTER the ad genuinely finishes — showAd()
     // only calls this callback once the countdown has actually completed
@@ -1016,7 +1040,7 @@ function doBonusSpin() {
     showAd(() => {
         spD.extra++;
         localStorage.setItem('meylo_spin', JSON.stringify(spD));
-        playSpinAnimation(updateSpinUI);
+        playSpinAnimation(() => { spinInProgress = false; updateSpinUI(); });
         updateSpinUI();
     }, 6);
 }
