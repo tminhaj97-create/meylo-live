@@ -146,6 +146,71 @@ function initPortal() {
     updateSpinUI();
 }
 
+let hiddenUids = new Set(); // people I've blocked, or who've blocked me
+
+function loadBlockLists() {
+    if (!currentUser || !currentUser.uid) return;
+    const myBlocks = db.ref(`blocks/${currentUser.uid}`);
+    const myBlockedBy = db.ref(`blockedBy/${currentUser.uid}`);
+
+    function refreshHidden() {
+        Promise.all([myBlocks.once('value'), myBlockedBy.once('value')]).then(([a, b]) => {
+            const setA = Object.keys(a.val() || {});
+            const setB = Object.keys(b.val() || {});
+            hiddenUids = new Set([...setA, ...setB]);
+            renderMatches();
+            loadCard();
+        });
+    }
+    myBlocks.on('value', refreshHidden);
+    myBlockedBy.on('value', refreshHidden);
+}
+
+async function blockUser(targetUid) {
+    if (!currentUser || !targetUid) return;
+    try {
+        await db.ref(`blocks/${currentUser.uid}/${targetUid}`).set(true);
+        await db.ref(`blockedBy/${targetUid}/${currentUser.uid}`).set(true);
+        showToast('🚫 User blocked');
+        closeMo('visitMo');
+        if (activeChatUser && activeChatUser.id === targetUid) {
+            activeChatUser = null;
+            switchV('swipeDeck', document.getElementById('bbtn-swipeDeck'));
+        }
+    } catch (err) {
+        showToast('⚠️ Could not block user');
+    }
+}
+
+function openReportModal(targetUid, targetName) {
+    reportTargetUid = targetUid;
+    document.getElementById('reportTargetName').innerText = targetName || 'this user';
+    document.querySelectorAll('#reportReasons .interest-tag').forEach(t => t.classList.remove('selected'));
+    openMo('reportMo');
+}
+
+let reportTargetUid = null;
+
+async function submitReport() {
+    const selected = document.querySelector('#reportReasons .interest-tag.selected');
+    if (!selected) { showToast('⚠️ Please select a reason'); return; }
+    if (!reportTargetUid || !currentUser) return;
+
+    try {
+        await db.ref('reports').push({
+            reporterId: currentUser.uid,
+            reportedId: reportTargetUid,
+            reason: selected.dataset.reason,
+            timestamp: Date.now()
+        });
+        closeMo('reportMo');
+        closeMo('visitMo');
+        showToast('✅ Report submitted — thank you');
+    } catch (err) {
+        showToast('⚠️ Could not submit report');
+    }
+}
+
 function syncWithFirebase() {
     if (currentUser && currentUser.uid) {
         // Only fields the database rules allow us to write are sent here.
@@ -169,6 +234,7 @@ function syncWithFirebase() {
             voiceIntro: currentUser.voiceIntro || null,
             lastSeen: Date.now()
         });
+        loadBlockLists();
     }
 
     db.ref('users').on('value', snapshot => {
@@ -176,7 +242,7 @@ function syncWithFirebase() {
         onlineUsers = [];
         if (data) {
             Object.keys(data).forEach(key => {
-                if (!currentUser || key !== currentUser.uid) {
+                if ((!currentUser || key !== currentUser.uid) && !hiddenUids.has(key)) {
                     onlineUsers.push(data[key]);
                 }
             });
