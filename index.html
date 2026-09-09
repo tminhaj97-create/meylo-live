@@ -125,6 +125,17 @@
             <div class="feature-card"><div class="feature-icon"><i class="fas fa-gift"></i></div><h3>Virtual Gifting</h3><p>Send fun virtual gifts to your matches using coins.</p></div>
         </div>
     </section>
+
+    <footer style="border-top:1px solid var(--border);padding:32px 24px;text-align:center">
+        <p style="font-size:12px;color:var(--fg-muted)">
+            <a href="privacy.html" style="color:var(--fg-muted);text-decoration:underline">Privacy Policy</a>
+            &nbsp;·&nbsp;
+            <a href="terms.html" style="color:var(--fg-muted);text-decoration:underline">Terms of Service</a>
+            &nbsp;·&nbsp;
+            <a href="mailto:meylosupport@gmail.com" style="color:var(--fg-muted);text-decoration:underline">Contact</a>
+        </p>
+        <p style="font-size:11px;color:#555;margin-top:8px">© 2026 Meylo. For users 18+ only.</p>
+    </footer>
 </div>
 
 <!-- ========================================== -->
@@ -352,6 +363,10 @@
         </div>
         <div class="form-group"><label>Email*</label><input type="email" id="rMail" class="form-control" placeholder="you@example.com"></div>
         <div class="form-group"><label>Password (min 6 chars)*</label><input type="password" id="rPass" class="form-control" placeholder="••••••"></div>
+        <div class="form-group" style="display:flex;align-items:flex-start;gap:8px;margin-top:6px">
+            <input type="checkbox" id="rAgree" style="margin-top:3px">
+            <label for="rAgree" style="font-size:11px;color:var(--fg-muted);cursor:pointer">I confirm I am 18+ and agree to the <a href="terms.html" target="_blank" style="color:var(--accent)">Terms of Service</a> and <a href="privacy.html" target="_blank" style="color:var(--accent)">Privacy Policy</a>.</label>
+        </div>
         <button class="btn-primary" style="width:100%;justify-content:center;margin-top:10px" onclick="submitReg()"><i class="fas fa-check"></i> Join Now</button>
         <p style="font-size:11px;color:var(--fg-muted);text-align:center;margin-top:10px">Already have an account? <a style="color:var(--accent);cursor:pointer" onclick="closeMo('regMo');openMo('loginMo')">Log in</a></p>
     </div>
