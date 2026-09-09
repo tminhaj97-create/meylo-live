@@ -94,6 +94,7 @@ window.onload = () => {
     });
     const dobInput = document.getElementById('rDob');
     if (dobInput) dobInput.max = new Date().toISOString().slice(0, 10);
+    checkPaymentReturnStatus();
 };
 
 // ---- REAL AUTHENTICATION STATE ----
@@ -145,6 +146,8 @@ function initPortal() {
     renderTasks();
     updateSpinUI();
     listenForIncomingCalls();
+    const settingsEmailEl = document.getElementById('settingsEmail');
+    if (settingsEmailEl && auth.currentUser) settingsEmailEl.innerText = auth.currentUser.email || '—';
 }
 
 let hiddenUids = new Set(); // people I've blocked, or who've blocked me
@@ -691,14 +694,47 @@ function saveProf() {
 }
 
 // ---- PAYMENTS ----
-// The old code here simulated bKash/Nagad/card/PayPal checkouts and even
-// displayed the "OTP" to the user in an alert() — none of it moved real
-// money or talked to a real payment processor. That is misleading to real
-// users and is now disabled. Store/VIP buttons are marked "Coming Soon"
-// in index.html until a real, licensed payment processor (and a backend
-// Cloud Function to credit coins after a *verified* payment) is wired up.
-function openPay() {
-    showToast("💳 Payments are being set up with a real provider — coming soon!");
+// Real payment flow via SSLCommerz (currently sandbox/test mode — see the
+// notice on the Coin Store / VIP pages). The server (/api/initiate-payment)
+// decides the actual price from its own catalog — this function just tells
+// it WHICH package the user picked, then redirects to SSLCommerz's hosted
+// checkout page. After payment, SSLCommerz redirects back to our app, and
+// /api/payment-success independently re-verifies the payment before
+// crediting anything (see that file for details).
+async function startPayment(packageId) {
+    if (!currentUser) { showToast("⚠️ Please log in first"); return; }
+    showToast("⏳ Starting secure checkout...");
+    try {
+        const idToken = await auth.currentUser.getIdToken();
+        const resp = await fetch('/api/initiate-payment', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + idToken, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ packageId })
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.gatewayUrl) {
+            showToast('⚠️ ' + (data.error || 'Could not start payment'));
+            return;
+        }
+        window.location.href = data.gatewayUrl; // hand off to SSLCommerz's hosted checkout
+    } catch (err) {
+        showToast('⚠️ Network error — try again');
+    }
+}
+
+// Runs on page load — checks if we just came back from a payment redirect
+// (?payment=success/failed/cancelled) and shows the result, then cleans up
+// the URL so refreshing doesn't re-trigger the message.
+function checkPaymentReturnStatus() {
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get('payment');
+    if (!status) return;
+    if (status === 'success') showToast('🎉 Payment successful! Coins/VIP have been added.');
+    else if (status === 'cancelled') showToast('Payment cancelled.');
+    else showToast('⚠️ Payment failed — no charge was made.');
+    params.delete('payment');
+    const newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
+    window.history.replaceState({}, '', newUrl);
 }
 
 // ============================================================
@@ -988,7 +1024,7 @@ function startCallBillingTimer() {
         callSecs++;
         const m = Math.floor(callSecs / 60), s = callSecs % 60;
         document.getElementById('clTimer').innerText = `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
-        const ratePerMinute = callType === 'video' ? 15 : 8;
+        const ratePerMinute = callType === 'video' ? 5 : 4;
         if (callSecs > 60 && callSecs % 60 === 1) {
             if (vip) return;
             if (coins >= ratePerMinute) {
