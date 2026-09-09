@@ -45,6 +45,7 @@
                 <div class="dropdown-item" onclick="switchV('spin');closeDD()"><i class="fas fa-dharmachakra"></i> Lucky Spin</div>
                 <div class="dropdown-item" onclick="switchV('store');closeDD()"><i class="fas fa-store"></i> Coin Store</div>
                 <div class="dropdown-item" onclick="switchV('vip');closeDD()"><i class="fas fa-crown"></i> VIP Pass</div>
+                <div class="dropdown-item" onclick="switchV('settings');closeDD()"><i class="fas fa-gear"></i> Settings</div>
                 <div class="dropdown-item danger" onclick="logout()"><i class="fas fa-sign-out-alt"></i> Logout</div>
             </div>
         </div>
@@ -153,6 +154,7 @@
         <button class="sidebar-btn" id="sbtn-myProfile" onclick="switchV('myProfile',this)"><i class="fas fa-user"></i> My Profile</button>
         <button class="sidebar-btn" id="sbtn-store" onclick="switchV('store',this)"><i class="fas fa-store"></i> Coin Store</button>
         <button class="sidebar-btn" id="sbtn-vip" style="color:var(--gold)" onclick="switchV('vip',this)"><i class="fas fa-crown"></i> VIP Pass</button>
+        <button class="sidebar-btn" id="sbtn-settings" onclick="switchV('settings',this)"><i class="fas fa-gear"></i> Settings</button>
     </div>
 
     <div style="flex:1">
@@ -295,22 +297,63 @@
         <div class="portal-view" id="view-store">
             <h2 style="font-family:'Syne',sans-serif;font-size:22px;margin-bottom:12px">Coin Store</h2>
             <div style="background:#181818;border:1px solid var(--gold);border-radius:14px;padding:16px;margin-bottom:16px;text-align:center">
-                <i class="fas fa-tools" style="color:var(--gold);font-size:20px"></i>
-                <p style="font-size:13px;margin-top:8px">Real payments are being set up with a licensed payment processor. Purchases are temporarily disabled — no card or mobile wallet details are collected here.</p>
+                <i class="fas fa-flask" style="color:var(--gold);font-size:20px"></i>
+                <p style="font-size:13px;margin-top:8px">Payments are running in <strong>sandbox/test mode</strong> — no real money is charged. Use SSLCommerz's test card/mobile banking details at checkout.</p>
             </div>
             <div class="store-grid">
-                <div class="store-card"><h4 style="font-size:12px;color:var(--fg-muted)">Bronze Pack</h4><div class="coin-val">🪙 100</div><button class="nav-cta" disabled style="opacity:0.4;cursor:not-allowed">Coming Soon</button></div>
-                <div class="store-card featured"><h4 style="font-size:12px;color:var(--gold)">Popular Choice</h4><div class="coin-val">🪙 300</div><button class="nav-cta" disabled style="opacity:0.4;cursor:not-allowed;background:var(--gold);color:#000">Coming Soon</button></div>
-                <div class="store-card"><h4 style="font-size:12px;color:var(--fg-muted)">Best Value</h4><div class="coin-val">🪙 1000</div><button class="nav-cta" disabled style="opacity:0.4;cursor:not-allowed">Coming Soon</button></div>
+                <div class="store-card"><h4 style="font-size:12px;color:var(--fg-muted)">Bronze Pack</h4><div class="coin-val">🪙 100</div><button class="nav-cta" onclick="startPayment('bronze')">৳100</button></div>
+                <div class="store-card featured"><h4 style="font-size:12px;color:var(--gold)">Popular Choice</h4><div class="coin-val">🪙 300</div><button class="nav-cta" style="background:var(--gold);color:#000" onclick="startPayment('popular')">৳250</button></div>
+                <div class="store-card"><h4 style="font-size:12px;color:var(--fg-muted)">Best Value</h4><div class="coin-val">🪙 1000</div><button class="nav-cta" onclick="startPayment('best')">৳750</button></div>
             </div>
         </div>
 
         <div class="portal-view" id="view-vip">
             <div class="vip-box">
                 <h2 style="font-family:'Syne',sans-serif;font-size:24px;color:var(--gold)">Meylo VIP Pass</h2>
-                <p style="font-size:13px;color:var(--fg-muted);margin:10px 0">Unlimited calls & an ad-free experience — coming soon once payments are live.</p>
-                <button class="nav-cta" disabled style="opacity:0.4;cursor:not-allowed;background:linear-gradient(135deg,var(--gold),#FFA500);color:#000;font-weight:800;padding:12px 28px">Coming Soon</button>
+                <p style="font-size:13px;color:var(--fg-muted);margin:10px 0">Unlimited calls & an ad-free experience for 30 days. <strong>(Sandbox/test payment — no real money charged)</strong></p>
+                <button class="nav-cta" style="background:linear-gradient(135deg,var(--gold),#FFA500);color:#000;font-weight:800;padding:12px 28px" onclick="startPayment('vip_monthly')">৳500/month</button>
             </div>
+        </div>
+
+        <div class="portal-view" id="view-settings">
+            <h2 style="font-family:'Syne',sans-serif;font-size:22px;margin-bottom:16px">Settings</h2>
+
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;overflow:hidden;margin-bottom:16px">
+                <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
+                    <p style="font-size:11px;color:var(--fg-muted)">Logged in as</p>
+                    <p style="font-size:13px;font-weight:600" id="settingsEmail">—</p>
+                </div>
+            </div>
+
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;overflow:hidden;margin-bottom:16px">
+                <a href="terms.html" target="_blank" style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border);text-decoration:none;color:var(--fg)">
+                    <span style="font-size:13px"><i class="fas fa-file-contract" style="width:20px;color:var(--fg-muted)"></i> Terms of Service</span>
+                    <i class="fas fa-chevron-right" style="font-size:11px;color:var(--fg-muted)"></i>
+                </a>
+                <a href="privacy.html" target="_blank" style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border);text-decoration:none;color:var(--fg)">
+                    <span style="font-size:13px"><i class="fas fa-user-shield" style="width:20px;color:var(--fg-muted)"></i> Privacy Policy</span>
+                    <i class="fas fa-chevron-right" style="font-size:11px;color:var(--fg-muted)"></i>
+                </a>
+                <a href="mailto:meylosupport@gmail.com?subject=Meylo%20Support" style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;text-decoration:none;color:var(--fg)">
+                    <span style="font-size:13px"><i class="fas fa-envelope" style="width:20px;color:var(--fg-muted)"></i> Contact / Support</span>
+                    <i class="fas fa-chevron-right" style="font-size:11px;color:var(--fg-muted)"></i>
+                </a>
+            </div>
+
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;overflow:hidden;margin-bottom:16px">
+                <a href="mailto:meylosupport@gmail.com?subject=Report%20a%20Problem" style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border);text-decoration:none;color:var(--fg)">
+                    <span style="font-size:13px"><i class="fas fa-flag" style="width:20px;color:var(--fg-muted)"></i> Report a Problem</span>
+                    <i class="fas fa-chevron-right" style="font-size:11px;color:var(--fg-muted)"></i>
+                </a>
+                <a href="mailto:meylosupport@gmail.com?subject=Delete%20My%20Account&body=Please%20delete%20my%20Meylo%20account%20and%20all%20associated%20data.%20My%20account%20email%3A%20" style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;text-decoration:none;color:#f44336">
+                    <span style="font-size:13px"><i class="fas fa-trash" style="width:20px"></i> Delete My Account</span>
+                    <i class="fas fa-chevron-right" style="font-size:11px"></i>
+                </a>
+            </div>
+
+            <button class="btn-secondary" style="width:100%;justify-content:center;color:#f44336;border-color:#f44336" onclick="logout()"><i class="fas fa-sign-out-alt"></i> Log Out</button>
+
+            <p style="font-size:11px;color:#555;text-align:center;margin-top:20px">Meylo — For users 18+ only.</p>
         </div>
 
         <div class="portal-view" id="view-autoMatch">
