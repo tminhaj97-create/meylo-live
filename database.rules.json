@@ -107,6 +107,20 @@
         ".write": "auth != null && !data.exists() && newData.child('reporterId').val() === auth.uid",
         ".validate": "newData.hasChildren(['reporterId','reportedId','reason','timestamp'])"
       }
+    },
+    "calls": {
+      "$callId": {
+        ".read": "auth != null && (data.child('callerId').val() === auth.uid || data.child('calleeId').val() === auth.uid || (!data.exists() && newData.child('callerId').val() === auth.uid))",
+        ".write": "auth != null && (data.child('callerId').val() === auth.uid || data.child('calleeId').val() === auth.uid || (!data.exists() && newData.child('callerId').val() === auth.uid))"
+      }
+    },
+    "incomingCalls": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        "$callId": {
+          ".write": "auth != null && (auth.uid === $uid || (newData.exists() && newData.child('callerId').val() === auth.uid))"
+        }
+      }
     }
   }
 }
