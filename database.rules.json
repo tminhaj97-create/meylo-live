@@ -110,7 +110,7 @@
     },
     "calls": {
       "$callId": {
-        ".read": "auth != null && (data.child('callerId').val() === auth.uid || data.child('calleeId').val() === auth.uid || (!data.exists() && newData.child('callerId').val() === auth.uid))",
+        ".read": "auth != null && (data.child('callerId').val() === auth.uid || data.child('calleeId').val() === auth.uid)",
         ".write": "auth != null && (data.child('callerId').val() === auth.uid || data.child('calleeId').val() === auth.uid || (!data.exists() && newData.child('callerId').val() === auth.uid))"
       }
     },
