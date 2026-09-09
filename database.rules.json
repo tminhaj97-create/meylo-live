@@ -121,6 +121,10 @@
           ".write": "auth != null && (auth.uid === $uid || (newData.exists() && newData.child('callerId').val() === auth.uid))"
         }
       }
+    },
+    "orders": {
+      ".read": false,
+      ".write": false
     }
   }
 }
