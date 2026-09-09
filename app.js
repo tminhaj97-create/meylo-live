@@ -144,6 +144,7 @@ function initPortal() {
     renderProf();
     renderTasks();
     updateSpinUI();
+    listenForIncomingCalls();
 }
 
 let hiddenUids = new Set(); // people I've blocked, or who've blocked me
@@ -700,93 +701,321 @@ function openPay() {
     showToast("💳 Payments are being set up with a real provider — coming soon!");
 }
 
-// ---- AUTO MATCH VIDEO CALL ----
-let acStream = null, acTimer = null, acSec = 0;
-function startAutoMatch() {
-    history.pushState({ modal: 'autoCall' }, '');
-    const rand = onlineUsers[Math.floor(Math.random() * onlineUsers.length)] || { name: 'Match', avatar: 'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=500&h=700&fit=crop' };
-    document.getElementById('acNm').innerText = `Demo Preview — ${rand.name.split(',')[0]}`;
-    document.getElementById('acRemote').src = rand.avatar;
-    openMo('autoCallMo');
-    startAcCam();
+// ============================================================
+// REAL VIDEO/AUDIO CALLS (WebRTC)
+// ============================================================
+// Signaling (exchanging connection info between the two browsers) happens
+// through Firebase Realtime Database under calls/{callId} — this is NOT
+// the video/audio itself, just the handshake info (offer/answer/ICE
+// candidates) needed for the two browsers to find a direct route to each
+// other. Once connected, video/audio flows directly between the two
+// devices (peer-to-peer), not through our server.
+//
+// LIMITATION: this uses free public STUN servers only (no TURN server).
+// STUN works for most home/mobile networks, but calls MAY fail to connect
+// on some restrictive networks (strict corporate firewalls, certain
+// carrier-grade NAT setups) where a TURN relay would be required. Adding
+// a TURN server (e.g. via Twilio) is a reasonable future improvement.
+const ICE_SERVERS = {
+    iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+    ]
+};
+
+let pc = null;
+let localStream = null;
+let currentCallId = null;
+let currentCallRole = null; // 'caller' | 'callee'
+let pendingIncomingCall = null;
+let callActiveListeners = [];
+let callBillingTimer = null, callSecs = 0;
+let callType = 'video';
+
+function trackCallListener(ref, event) {
+    callActiveListeners.push({ ref, event });
 }
 
-async function startAcCam() {
-    try {
-        acStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        document.getElementById('acLocal').srcObject = acStream;
-        acSec = 0;
-        acTimer = setInterval(() => {
-            acSec++;
-            let m = Math.floor(acSec / 60), s = acSec % 60;
-            document.getElementById('acTimer').innerText = `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
-            if (acSec > 30 && (acSec - 30) % 60 === 1) {
-                if (coins >= 15) {
-                    showToast("🪙 This call uses coins — balance changes are verified server-side.");
-                } else {
-                    showToast("🚨 Out of coins!");
-                    closeAutoCall();
-                }
-            }
-        }, 1000);
-    } catch (e) { showToast("⚠️ Camera/Mic error"); closeAutoCall(); }
+function detachCallListeners() {
+    callActiveListeners.forEach(({ ref, event }) => ref.off(event));
+    callActiveListeners = [];
 }
 
-function closeAutoCall() {
-    clearInterval(acTimer);
-    if (acStream) acStream.getTracks().forEach(t => t.stop());
-    closeMo('autoCallMo');
-    showAd(null, Math.floor(Math.random() * 6) + 5);
-}
+// One listener, attached once when the portal loads, so you can receive a
+// call from anyone at any time while the app is open.
+function listenForIncomingCalls() {
+    if (!currentUser || !currentUser.uid) return;
+    db.ref(`incomingCalls/${currentUser.uid}`).on('child_added', snap => {
+        const call = snap.val();
+        const callId = snap.key;
+        if (!call) return;
 
-// ---- REGULAR CALL ----
-let clTimer = null, clSecs = 0, clStream = null, clType = 'video';
-function callUser(type) {
-    if (!activeChatUser) return;
-    openCallModal(activeChatUser, type);
-}
-
-function openCallModal(p, type) {
-    history.pushState({ modal: 'call' }, '');
-    showAd(() => {
-        clType = type;
-        document.getElementById('clNm').innerText = `Demo Preview — ${p.name.split(',')[0]}`;
-        const pic = p.avatar || '';
-        if (type === 'video') {
-            document.getElementById('clVidUI').style.display = 'flex';
-            document.getElementById('clAudUI').style.display = 'none';
-            document.getElementById('clRemote').src = pic;
-        } else {
-            document.getElementById('clVidUI').style.display = 'none';
-            document.getElementById('clAudUI').style.display = 'flex';
-            document.getElementById('clAudAv').src = pic;
+        if (pendingIncomingCall || currentCallId) {
+            // Already on a call or already have a pending ring — decline automatically.
+            db.ref(`calls/${callId}/status`).set('declined').catch(() => {});
+            db.ref(`incomingCalls/${currentUser.uid}/${callId}`).remove().catch(() => {});
+            return;
         }
-        openMo('callMo');
-        startCallMedia();
+
+        pendingIncomingCall = { callId, ...call };
+        document.getElementById('icAv').src = call.callerAvatar || '';
+        document.getElementById('icNm').innerText = call.callerName || 'Someone';
+        document.getElementById('icType').innerText = call.type === 'video' ? 'Incoming video call...' : 'Incoming audio call...';
+        openMo('incomingCallMo');
+
+        // If the caller hangs up before we answer, close the ringing modal.
+        const statusRef = db.ref(`calls/${callId}/status`);
+        statusRef.on('value', s => {
+            if (s.val() === 'ended' && pendingIncomingCall && pendingIncomingCall.callId === callId) {
+                closeMo('incomingCallMo');
+                statusRef.off('value');
+                db.ref(`incomingCalls/${currentUser.uid}/${callId}`).remove().catch(() => {});
+                pendingIncomingCall = null;
+                showToast('📵 Missed call');
+            }
+        });
     });
 }
 
-async function startCallMedia() {
-    try {
-        clStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: (clType === 'video') });
-        if (clType === 'video') document.getElementById('clLocal').srcObject = clStream;
-        clSecs = 0;
-        document.getElementById('clTimer').innerText = "00:00";
-        document.getElementById('clCoins').innerText = coins;
-        clTimer = setInterval(() => {
-            clSecs++;
-            let m = Math.floor(clSecs / 60), s = clSecs % 60;
-            document.getElementById('clTimer').innerText = `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
-        }, 1000);
-    } catch (e) { showToast("⚠️ Device error"); closeCall(); }
+async function createPeerConnection(callId, isCaller) {
+    pc = new RTCPeerConnection(ICE_SERVERS);
+    localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+    const remoteStream = new MediaStream();
+    const remoteVideoEl = document.getElementById('clRemoteVideo');
+    const remoteAudioEl = document.getElementById('clRemoteAudio');
+    remoteVideoEl.srcObject = remoteStream;
+    remoteAudioEl.srcObject = remoteStream;
+
+    pc.ontrack = (event) => {
+        event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
+    };
+
+    const candidatePath = isCaller ? `calls/${callId}/callerCandidates` : `calls/${callId}/calleeCandidates`;
+    pc.onicecandidate = (event) => {
+        if (event.candidate) db.ref(candidatePath).push(event.candidate.toJSON());
+    };
+
+    pc.onconnectionstatechange = () => {
+        if (pc && pc.connectionState === 'connected') {
+            document.getElementById('clStatus').style.display = 'none';
+            document.getElementById('clAudStatus').innerText = 'Connected';
+            remoteVideoEl.style.display = 'block';
+            startCallBillingTimer();
+        }
+    };
 }
 
-function closeCall() {
-    clearInterval(clTimer);
-    if (clStream) clStream.getTracks().forEach(t => t.stop());
-    closeMo('callMo');
-    showAd(null, Math.floor(Math.random() * 6) + 5);
+function resetCallUI() {
+    document.getElementById('clStatus').style.display = 'flex';
+    document.getElementById('clStatus').innerText = 'Calling...';
+    document.getElementById('clAudStatus').innerText = 'Calling...';
+    document.getElementById('clRemoteVideo').style.display = 'none';
 }
+
+// ---- CALLER SIDE ----
+async function initiateCall(targetUid, targetName, targetAvatar, type) {
+    if (!currentUser) { showToast('⚠️ Please log in first'); return; }
+    history.pushState({ modal: 'call' }, '');
+    callType = type;
+    resetCallUI();
+    document.getElementById('clNm').innerText = targetName || 'Calling...';
+    document.getElementById('clAudAv').src = targetAvatar || '';
+    document.getElementById('clCoins').innerText = coins;
+    if (type === 'video') {
+        document.getElementById('clVidUI').style.display = 'flex';
+        document.getElementById('clAudUI').style.display = 'none';
+    } else {
+        document.getElementById('clVidUI').style.display = 'none';
+        document.getElementById('clAudUI').style.display = 'flex';
+    }
+    openMo('callMo');
+
+    try {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: type === 'video' });
+    } catch (e) {
+        showToast('⚠️ Camera/Mic permission needed');
+        closeMo('callMo');
+        return;
+    }
+    if (type === 'video') document.getElementById('clLocal').srcObject = localStream;
+
+    const callId = db.ref('calls').push().key;
+    currentCallId = callId;
+    currentCallRole = 'caller';
+
+    await createPeerConnection(callId, true);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    await db.ref(`calls/${callId}`).set({
+        callerId: currentUser.uid,
+        callerName: currentUser.name,
+        callerAvatar: currentUser.avatar || '',
+        calleeId: targetUid,
+        type: type,
+        status: 'ringing',
+        offer: { sdp: offer.sdp, type: offer.type },
+        createdAt: Date.now()
+    });
+    await db.ref(`incomingCalls/${targetUid}/${callId}`).set({
+        callerId: currentUser.uid,
+        callerName: currentUser.name,
+        callerAvatar: currentUser.avatar || '',
+        type: type,
+        timestamp: Date.now()
+    });
+
+    const answerRef = db.ref(`calls/${callId}/answer`);
+    answerRef.on('value', async snap => {
+        const answer = snap.val();
+        if (answer && pc && !pc.currentRemoteDescription) {
+            await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        }
+    });
+    trackCallListener(answerRef, 'value');
+
+    const calleeCandRef = db.ref(`calls/${callId}/calleeCandidates`);
+    calleeCandRef.on('child_added', snap => {
+        if (pc) pc.addIceCandidate(new RTCIceCandidate(snap.val())).catch(() => {});
+    });
+    trackCallListener(calleeCandRef, 'child_added');
+
+    const statusRef = db.ref(`calls/${callId}/status`);
+    statusRef.on('value', snap => {
+        const status = snap.val();
+        if (status === 'declined') { showToast('📵 Call declined'); endCall(true); }
+    });
+    trackCallListener(statusRef, 'value');
+}
+
+// Called from the chat header call buttons.
+function callUser(type) {
+    if (!activeChatUser) return;
+    initiateCall(activeChatUser.id, activeChatUser.name.split(',')[0], activeChatUser.avatar, type);
+}
+
+// Auto Match now reuses the same real call flow — it just calls a random
+// online (non-blocked) member and starts a normal video call with them.
+function startAutoMatch() {
+    const candidates = onlineUsers.filter(u => u.id && u.id !== currentUser?.uid);
+    if (candidates.length === 0) { showToast('⚠️ No one else is online right now'); return; }
+    const target = candidates[Math.floor(Math.random() * candidates.length)];
+    initiateCall(target.id, `Auto Match — ${target.name.split(',')[0]}`, target.avatar, 'video');
+}
+
+// ---- CALLEE SIDE ----
+async function acceptIncomingCall() {
+    if (!pendingIncomingCall) return;
+    const { callId, callerId, callerName, callerAvatar, type } = pendingIncomingCall;
+    closeMo('incomingCallMo');
+    db.ref(`incomingCalls/${currentUser.uid}/${callId}`).remove().catch(() => {});
+
+    history.pushState({ modal: 'call' }, '');
+    callType = type;
+    resetCallUI();
+    document.getElementById('clNm').innerText = callerName || 'Someone';
+    document.getElementById('clAudAv').src = callerAvatar || '';
+    document.getElementById('clCoins').innerText = coins;
+    if (type === 'video') {
+        document.getElementById('clVidUI').style.display = 'flex';
+        document.getElementById('clAudUI').style.display = 'none';
+    } else {
+        document.getElementById('clVidUI').style.display = 'none';
+        document.getElementById('clAudUI').style.display = 'flex';
+    }
+    openMo('callMo');
+
+    try {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: type === 'video' });
+    } catch (e) {
+        showToast('⚠️ Camera/Mic permission needed');
+        await db.ref(`calls/${callId}/status`).set('declined');
+        closeMo('callMo');
+        pendingIncomingCall = null;
+        return;
+    }
+    if (type === 'video') document.getElementById('clLocal').srcObject = localStream;
+
+    currentCallId = callId;
+    currentCallRole = 'callee';
+    pendingIncomingCall = null;
+
+    await createPeerConnection(callId, false);
+
+    const offerSnap = await db.ref(`calls/${callId}/offer`).once('value');
+    const offer = offerSnap.val();
+    if (!offer) { showToast('⚠️ Call is no longer available'); closeCall(); return; }
+
+    await pc.setRemoteDescription(new RTCSessionDescription(offer));
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    await db.ref(`calls/${callId}/answer`).set({ sdp: answer.sdp, type: answer.type });
+    await db.ref(`calls/${callId}/status`).set('accepted');
+
+    const callerCandRef = db.ref(`calls/${callId}/callerCandidates`);
+    callerCandRef.on('child_added', snap => {
+        if (pc) pc.addIceCandidate(new RTCIceCandidate(snap.val())).catch(() => {});
+    });
+    trackCallListener(callerCandRef, 'child_added');
+
+    const statusRef = db.ref(`calls/${callId}/status`);
+    statusRef.on('value', snap => {
+        if (snap.val() === 'ended') endCall(true);
+    });
+    trackCallListener(statusRef, 'value');
+}
+
+function declineIncomingCall() {
+    if (!pendingIncomingCall) return;
+    const { callId } = pendingIncomingCall;
+    db.ref(`calls/${callId}/status`).set('declined').catch(() => {});
+    db.ref(`incomingCalls/${currentUser.uid}/${callId}`).remove().catch(() => {});
+    pendingIncomingCall = null;
+    closeMo('incomingCallMo');
+}
+
+// ---- SHARED: BILLING + HANGUP ----
+// NOTE ON HONESTY: this deducts coins locally in the UI once the call
+// connects, same as the previous version — actual per-minute call billing
+// is not yet enforced server-side (unlike coins from ads/tasks/gifts,
+// which ARE server-verified). This is a known gap or a possible feature to
+// build next: a server-verified call-duration billing endpoint.
+function startCallBillingTimer() {
+    callSecs = 0;
+    clearInterval(callBillingTimer);
+    callBillingTimer = setInterval(() => {
+        callSecs++;
+        const m = Math.floor(callSecs / 60), s = callSecs % 60;
+        document.getElementById('clTimer').innerText = `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
+        const ratePerMinute = callType === 'video' ? 15 : 8;
+        if (callSecs > 60 && callSecs % 60 === 1) {
+            if (vip) return;
+            if (coins >= ratePerMinute) {
+                showToast(`🪙 Call in progress (${ratePerMinute}/min)`);
+            } else {
+                showToast('🚨 Low balance!');
+            }
+        }
+    }, 1000);
+}
+
+function endCall(remoteEnded) {
+    clearInterval(callBillingTimer);
+    detachCallListeners();
+    if (pc) { pc.close(); pc = null; }
+    if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
+
+    if (currentCallId && !remoteEnded) {
+        db.ref(`calls/${currentCallId}/status`).set('ended').catch(() => {});
+    }
+    currentCallId = null;
+    currentCallRole = null;
+    closeMo('callMo');
+}
+
+function closeCall() { endCall(false); }
+function closeAutoCall() { endCall(false); } // kept for any lingering references; Auto Match now uses closeCall()
 
 function openEdit2() { openMo('editMo'); }
 function openReg() { history.pushState({ modal: 'reg' }, ''); openMo('regMo'); }
