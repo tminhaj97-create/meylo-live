@@ -823,6 +823,7 @@ async function submitReg() {
     if (age < 18) { showToast("⚠️ Must be 18+!"); return; }
     if (!email) { showToast("⚠️ Enter a valid email"); return; }
     if (!password || password.length < 6) { showToast("⚠️ Password must be 6+ characters"); return; }
+    if (!document.getElementById('rAgree').checked) { showToast("⚠️ Please agree to the Terms & Privacy Policy"); return; }
 
     try {
         const cred = await auth.createUserWithEmailAndPassword(email, password);
