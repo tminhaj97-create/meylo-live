@@ -11,6 +11,7 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 const auth = firebase.auth();
+const storage = firebase.storage();
 
 let onlineUsers = [];
 let currentUser = null;
@@ -109,7 +110,11 @@ auth.onAuthStateChanged(async (user) => {
                 currentUser = profile;
                 currentUser.uid = user.uid;
                 coins = currentUser.coins || 0;
-                vip = currentUser.vip || false;
+                // VIP expiry check: if vipExpiresAt has passed, treat as
+                // non-VIP here in the app even though the database still
+                // has vip:true (we don't rewrite it — see note below).
+                const vipStillActive = currentUser.vip && (!currentUser.vipExpiresAt || Date.now() < currentUser.vipExpiresAt);
+                vip = !!vipStillActive;
                 initPortal();
                 syncWithFirebase();
             } else {
@@ -148,6 +153,18 @@ function initPortal() {
     listenForIncomingCalls();
     const settingsEmailEl = document.getElementById('settingsEmail');
     if (settingsEmailEl && auth.currentUser) settingsEmailEl.innerText = auth.currentUser.email || '—';
+
+    const verifyText = document.getElementById('verifyStatusText');
+    const resendBtn = document.getElementById('resendVerifyBtn');
+    if (verifyText && auth.currentUser) {
+        if (auth.currentUser.emailVerified) {
+            verifyText.innerHTML = '<i class="fas fa-check-circle" style="color:var(--green)"></i> Email verified';
+            resendBtn.style.display = 'none';
+        } else {
+            verifyText.innerHTML = '<i class="fas fa-exclamation-triangle" style="color:var(--gold)"></i> Email not verified';
+            resendBtn.style.display = 'inline-block';
+        }
+    }
 }
 
 let hiddenUids = new Set(); // people I've blocked, or who've blocked me
@@ -747,15 +764,30 @@ function checkPaymentReturnStatus() {
 // other. Once connected, video/audio flows directly between the two
 // devices (peer-to-peer), not through our server.
 //
-// LIMITATION: this uses free public STUN servers only (no TURN server).
-// STUN works for most home/mobile networks, but calls MAY fail to connect
-// on some restrictive networks (strict corporate firewalls, certain
-// carrier-grade NAT setups) where a TURN relay would be required. Adding
-// a TURN server (e.g. via Twilio) is a reasonable future improvement.
+// LIMITATION (partially addressed): a free public TURN server (Open Relay
+// Project by Metered) is now included as a fallback below. It requires no
+// signup, but as a shared free public service it isn't guaranteed to be
+// fast, always-up, or unlimited — a paid dedicated TURN service (e.g. via
+// Twilio) would be more reliable if call-connect failures become common.
 const ICE_SERVERS = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
+        { urls: 'stun:stun1.l.google.com:19302' },
+        {
+            urls: 'turn:openrelay.metered.ca:80',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+        },
+        {
+            urls: 'turn:openrelay.metered.ca:443',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+        },
+        {
+            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+        }
     ]
 };
 
@@ -838,6 +870,7 @@ async function createPeerConnection(callId, isCaller) {
             document.getElementById('clAudStatus').innerText = 'Connected';
             remoteVideoEl.style.display = 'block';
             startCallBillingTimer();
+            startServerBilling(callId);
         }
     };
 }
@@ -1012,11 +1045,13 @@ function declineIncomingCall() {
 }
 
 // ---- SHARED: BILLING + HANGUP ----
-// NOTE ON HONESTY: this deducts coins locally in the UI once the call
-// connects, same as the previous version — actual per-minute call billing
-// is not yet enforced server-side (unlike coins from ads/tasks/gifts,
-// which ARE server-verified). This is a known gap or a possible feature to
-// build next: a server-verified call-duration billing endpoint.
+// The on-screen clock below is purely cosmetic. The REAL billing happens
+// via startServerBilling(), which pings /api/bill-call-minute — that
+// endpoint independently tracks when the call connected and how many
+// minutes have really elapsed, and is the only thing that actually
+// deducts coins (see that file for details).
+let callBillingApiTimer = null;
+
 function startCallBillingTimer() {
     callSecs = 0;
     clearInterval(callBillingTimer);
@@ -1024,20 +1059,51 @@ function startCallBillingTimer() {
         callSecs++;
         const m = Math.floor(callSecs / 60), s = callSecs % 60;
         document.getElementById('clTimer').innerText = `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
-        const ratePerMinute = callType === 'video' ? 5 : 4;
-        if (callSecs > 60 && callSecs % 60 === 1) {
-            if (vip) return;
-            if (coins >= ratePerMinute) {
-                showToast(`🪙 Call in progress (${ratePerMinute}/min)`);
-            } else {
-                showToast('🚨 Low balance!');
-            }
-        }
     }, 1000);
+}
+
+async function pingCallBilling(callId) {
+    try {
+        const idToken = await auth.currentUser.getIdToken();
+        const resp = await fetch('/api/bill-call-minute', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + idToken, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ callId })
+        });
+        const data = await resp.json();
+
+        if (resp.status === 402) {
+            coins = data.newCoinBalance ?? coins;
+            currentUser.coins = coins;
+            document.getElementById('navC').innerText = coins;
+            document.getElementById('clCoins').innerText = coins;
+            showToast('🚨 Out of coins — ending call');
+            endCall(false);
+            return;
+        }
+        if (!resp.ok) return; // transient error — just skip this tick
+
+        if (typeof data.newCoinBalance === 'number') {
+            coins = data.newCoinBalance;
+            currentUser.coins = coins;
+            document.getElementById('navC').innerText = coins;
+            document.getElementById('clCoins').innerText = coins;
+            if (data.billed > 0) showToast(`🪙 -${data.billed} for call time`);
+        }
+    } catch (err) {
+        // network hiccup — don't end the call over one failed billing ping
+    }
+}
+
+function startServerBilling(callId) {
+    clearInterval(callBillingApiTimer);
+    pingCallBilling(callId); // immediate ping: establishes connectedAt, bills nothing yet
+    callBillingApiTimer = setInterval(() => pingCallBilling(callId), 60000);
 }
 
 function endCall(remoteEnded) {
     clearInterval(callBillingTimer);
+    clearInterval(callBillingApiTimer);
     detachCallListeners();
     if (pc) { pc.close(); pc = null; }
     if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
@@ -1107,8 +1173,9 @@ async function submitReg() {
             createdAt: Date.now()
         };
         await db.ref('users/' + uid).set(newProfile);
+        cred.user.sendEmailVerification().catch(() => {}); // non-fatal if it fails
         closeMo('regMo');
-        showToast("🎉 Account created!");
+        showToast("🎉 Account created! Check your email to verify it.");
         // onAuthStateChanged fires automatically and loads the portal
     } catch (err) {
         showToast("⚠️ " + (err.message || "Registration failed"));
@@ -1124,6 +1191,34 @@ async function submitLogin() {
         closeMo('loginMo');
     } catch (err) {
         showToast("⚠️ Login failed — check your email/password");
+    }
+}
+
+// Uses Firebase Authentication's built-in password reset — Firebase sends
+// the email and hosts the actual "set a new password" page itself, so no
+// custom backend code is needed for this to work securely.
+async function submitPasswordReset() {
+    const email = document.getElementById('fMail').value.trim();
+    if (!email) { showToast("⚠️ Enter your email"); return; }
+    try {
+        await auth.sendPasswordResetEmail(email);
+        showToast("📧 Reset link sent — check your email");
+        closeMo('forgotMo');
+    } catch (err) {
+        // Deliberately vague error message — confirming/denying whether an
+        // email is registered would let someone enumerate real accounts.
+        showToast("📧 If that email is registered, a reset link has been sent");
+        closeMo('forgotMo');
+    }
+}
+
+async function resendVerificationEmail() {
+    if (!auth.currentUser) return;
+    try {
+        await auth.currentUser.sendEmailVerification();
+        showToast('📧 Verification email sent');
+    } catch (err) {
+        showToast('⚠️ Could not send — try again later');
     }
 }
 
